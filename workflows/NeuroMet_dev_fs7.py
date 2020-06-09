@@ -12,7 +12,7 @@ import shutil
 import glob
 
 __author__ = "Andrea Dell'Orco"
-__version__ = "1.2.0_fs7"
+__version__ = "1.2.0"
 __maintainer__ = "Andrea Dell'Orco"
 __email__ = "andrea.dellorco@charite.de"
 __status__ = "Development"
@@ -332,10 +332,11 @@ class NeuroMet():
                                                openmp=self.omp_nthreads),
                          name='fs_recon2',
                          n_procs=self.omp_nthreads)
+        #2020.05 Hippocampal subfield is a separate script in Freesurfer 7
         fs_recon3 = Node(interface=fs.ReconAll(directive='autorecon3',
                                                hires=True,
                                                mprage=True,
-                                               hippocampal_subfields_T1=True,
+                                               hippocampal_subfields_T1=False,
                                                openmp=self.omp_nthreads),
                          name='fs_recon3',
                          n_procs=self.omp_nthreads)
