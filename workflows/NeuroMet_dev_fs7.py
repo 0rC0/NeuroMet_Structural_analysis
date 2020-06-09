@@ -10,9 +10,10 @@ from nipype.interfaces.utility import Function
 from nipype.algorithms.misc import Gunzip
 import shutil
 import glob
+from workflows.fssegmentHA_T1 import SegmentHA_T1 # freesurfer 7 hippocampus segmentation
 
 __author__ = "Andrea Dell'Orco"
-__version__ = "1.2.0"
+__version__ = "1.2.0_fs7"
 __maintainer__ = "Andrea Dell'Orco"
 __email__ = "andrea.dellorco@charite.de"
 __status__ = "Development"
@@ -37,6 +38,7 @@ class NeuroMet():
 
         self.subject_prefix = 'NeuroMet'
         self.mask_suffix = '.SPMbrain_bin.nii.gz'
+        self.mask_file = '/media/drive_s/AG/AG-Floeel-Imaging/02-User/NEUROMET/Structural_analysis_fs7/List_UNI_DEN_Mask.xlsx'
 
         mlab.MatlabCommand.set_default_matlab_cmd(matlab_command)
         mlab.MatlabCommand.set_default_paths(spm_path)
@@ -310,8 +312,8 @@ class NeuroMet():
         comb_imgs.connect(mask_uni_bias, 'out_file', uni_brain_den_surr_add, 'operand_file')
         return comb_imgs
 
-
     def make_freesurfer(self):
+
         # Ref: http://nipype.readthedocs.io/en/1.0.4/interfaces/generated/interfaces.freesurfer/preprocess.html#reconall
         fs_recon1 = Node(interface=fs.ReconAll(directive='autorecon1',
                                                mris_inflate='-n 15',
@@ -344,6 +346,7 @@ class NeuroMet():
         copy_brainmask = Node(
             Function(['in_file', 'fs_dir'], ['fs_dir'], self.copy_mask),
             name='copy_brainmask')
+        segment_hp = Node(interface=SegmentHA_T1(), name='segment_hp')
 
         freesurfer = Workflow(name='FreeSurfer', base_dir=self.temp_dir)
         freesurfer.connect(fs_recon1, 'T1', fs_vol2vol, 'target_file')
@@ -354,25 +357,36 @@ class NeuroMet():
         freesurfer.connect(fs_recon1, 'subjects_dir', copy_brainmask, 'fs_dir')
         freesurfer.connect(copy_brainmask, 'fs_dir', fs_recon2, 'subjects_dir')
         freesurfer.connect(fs_recon2, 'subjects_dir', fs_recon3, 'subjects_dir')
+        freesurfer.connect(fs_recon3, 'subjects_dir', segment_hp, 'subjects_dir')
         return freesurfer
 
+    def get_mask_name(subject_id):
+        import pandas as pd
+        # ToDo: correct this hard-coded mask_file
+        # TypeError: get_mask_name() missing 1 required positional argument: 'self
+        mask_file = '/media/drive_s/AG/AG-Floeel-Imaging/02-User/NEUROMET/Structural_analysis_fs7/List_UNI_DEN_Mask.xlsx'
+        df = pd.read_excel(mask_file, header=None, names=['ids', 'masks', 'note'])
+        d = dict(zip(df.ids.values, df.masks.values))
+        return d['NeuroMET' + subject_id]
 
     def make_neuromet2_workflow(self):
 
         infosource = self.make_infosource()
 
+        mask_source = Node(interface=Function(['mask_file', 'subject_id'], ['mask'], self.get_mask_name),
+                           name='get_mask')
         # Datasource: Build subjects' filenames from IDs
         info = dict(
-            mask = [['subject_id', '', 'subject_id', 'SPMbrain_bin.nii.gz']],
-            uni_bias_corr = [['subject_id', 'm', 'subject_id', 'UNI_mp2rage_orig_reoriented.nii']],
-            den_ro = [['subject_id', '', 'subject_id', 'DEN_mp2rage_orig_reoriented.nii.gz']])
+            mask = [['subject_id', '', 'subject_id', 'mask', '_brain_bin.nii.gz']],
+            uni_bias_corr = [['subject_id', 'm', 'subject_id', '', 'UNI_mp2rage_orig_reoriented.nii']],
+            den_ro = [['subject_id', '', 'subject_id', '', 'DEN_mp2rage_orig_reoriented.nii.gz']])
 
         datasource = Node(
             interface=DataGrabber(
-                infields=['subject_id'], outfields=['mask', 'uni_bias_corr', 'den_ro']),
+                infields=['subject_id', 'mask'], outfields=['mask', 'uni_bias_corr', 'den_ro']),
             name='datasource')
         datasource.inputs.base_directory = self.w_dir
-        datasource.inputs.template = 'NeuroMet%s/%sNeuroMet%s.%s'
+        datasource.inputs.template = 'NeuroMet%s/%sNeuroMet%s.%s%s'
         datasource.inputs.template_args = info
         datasource.inputs.sort_filelist = False
 
@@ -384,6 +398,8 @@ class NeuroMet():
 
         neuromet2 = Workflow(name='Neuromet2', base_dir=self.temp_dir)
         neuromet2.connect(infosource, 'subject_id', datasource, 'subject_id')
+        neuromet2.connect(infosource, 'subject_id', mask_source, 'subject_id')
+        neuromet2.connect(mask_source, 'mask', datasource, 'mask')
         neuromet2.connect(datasource, 'uni_bias_corr', comb_imgs, 'mask_uni_bias.in_file')
         neuromet2.connect(datasource, 'mask', comb_imgs, 'mask_uni_bias.mask_file')
         neuromet2.connect(datasource, 'den_ro', comb_imgs, 'uni_brain_den_surr_mas.in_file')
@@ -401,7 +417,7 @@ class NeuroMet():
 
         neuromet2.connect(comb_imgs, 'uni_brain_den_surr_add.out_file', sink, '@img')
         neuromet2.connect(infosource, 'subject_id', copy_freesurfer_dir, 'sub_id')
-        neuromet2.connect(freesurfer, 'fs_recon3.subjects_dir', copy_freesurfer_dir, 'in_dir')
+        neuromet2.connect(freesurfer, 'segment_hp.subjects_dir', copy_freesurfer_dir, 'in_dir')
         neuromet2.connect(out_dir_source, 'out_dir', copy_freesurfer_dir, 'out_dir')
 
         return neuromet2
